@@ -10,8 +10,8 @@
 
 ### Что понадобится
 
-- **Компьютер с Linux или macOS** (на Windows — через WSL). С него запускается Ansible, на сервер
-  ничего ставить руками не нужно.
+- **Компьютер с Linux, macOS или Windows** (на Windows — через WSL, см. ниже). С него запускается
+  Ansible, на сервер ничего ставить руками не нужно.
 - **VPS с Debian 13** у любого зарубежного хостера, от 1 vCPU и 1 ГБ памяти, с публичным IPv4.
   Проверь правила хостера: часть из них запрещает VPN или отдельные протоколы.
 - **Домен или поддомен**, которым ты управляешь. Подойдёт и бесплатный поддомен, например на
@@ -31,6 +31,30 @@ sudo dnf install ansible git
 brew install ansible git
 ```
 Проверка: `ansible-playbook --version` должен вывести версию.
+
+#### Windows
+
+Ansible на Windows напрямую не работает, поэтому ставим Linux внутрь Windows (WSL):
+
+1. Открой **PowerShell от имени администратора** (Пуск → PowerShell → правой кнопкой →
+   «Запуск от имени администратора») и выполни:
+   ```powershell
+   wsl --install -d Debian
+   ```
+2. Перезагрузи компьютер. После перезагрузки откроется окно Debian и попросит придумать
+   имя пользователя и пароль (это пароль для `sudo` внутри Linux, не от Windows).
+3. Дальше Debian открывается из меню Пуск. **Все команды этой инструкции выполняются в нём**, а не
+   в PowerShell и не в cmd. Сначала поставь Ansible и git:
+   ```sh
+   sudo apt update && sudo apt install -y ansible git
+   ```
+4. Работай в домашней папке Linux (`cd ~` перед `git clone`), **не** в `/mnt/c/...`: на дисках
+   Windows Ansible игнорирует `ansible.cfg` из соображений безопасности, и ничего не найдётся.
+
+SSH-ключ из шага 3 создаётся тоже внутри Debian — ключи Windows (`C:\Users\…\.ssh`) ему не видны.
+Файлы из Linux открываются в проводнике: выполни в Debian `explorer.exe .` — откроется текущая
+папка. Туннель к панели (`ssh -N -L …`) тоже запускай в Debian, а адрес панели открывай в обычном
+браузере Windows: `127.0.0.1` из WSL виден в Windows.
 
 ### 2. Скачать репозиторий
 
@@ -101,7 +125,8 @@ vpn.example.org : ok=61  changed=34  unreachable=0  failed=0 ...
 ```sh
 cat credentials/vpn.example.org/links.txt
 ```
-Это строка `vless://…`. Скопируй её и импортируй в клиент с поддержкой XHTTP — на Xray-core,
+Это строка `vless://…` (на Windows: открой папку через `explorer.exe credentials` и файл
+в Блокноте). Скопируй её и импортируй в клиент с поддержкой XHTTP — на Xray-core,
 например v2rayN (Windows, Linux, macOS) или v2rayNG (Android): «Импорт из буфера обмена».
 На роутере с OpenWrt — podkop с [podkop-engine](https://github.com/podkop-net/podkop-engine)
 (стоковый sing-box XHTTP не умеет).

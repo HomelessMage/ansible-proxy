@@ -1,0 +1,85 @@
+- name: Каталоги сайта и ACME
+  ansible.builtin.file: {path: "{{ item }}", state: directory, mode: "0755"}
+  loop: [/var/www/acme, /var/www/site]
+
+# Своя страница из site/<домен>/ (в .gitignore), иначе — стандартная страница nginx из Debian:
+# она одинакова у миллионов серверов и ничего не выдаёт.
+- name: Страница-заглушка из site/{{ inventory_hostname }}/
+  ansible.builtin.copy: {src: "{{ site_dir }}/", dest: /var/www/site/, mode: "0644", directory_mode: "0755"}
+  when: site_dir is directory
+
+- name: Стандартная страница nginx
+  ansible.builtin.copy:
+    src: /var/www/html/index.nginx-debian.html
+    dest: /var/www/site/index.html
+    remote_src: true
+    force: false
+    mode: "0644"
+  when: site_dir is not directory
+
+- name: server_tokens off
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^\s*#?\s*server_tokens'
+    line: "\tserver_tokens off;"
+  notify: reload nginx
+
+- name: Убрать сайт по умолчанию
+  ansible.builtin.file: {path: /etc/nginx/sites-enabled/default, state: absent}
+  notify: reload nginx
+
+- name: Есть ли сертификат
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ node_domain }}/fullchain.pem"}
+  register: cert
+
+- name: Виртуальный хост (без сертификата — только :80 для ACME)
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ node_domain }}"
+    mode: "0644"
+  vars: {tls: "{{ cert.stat.exists }}"}
+  notify: reload nginx
+
+- name: Включить виртуальный хост
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ node_domain }}"
+    dest: "/etc/nginx/sites-enabled/{{ node_domain }}"
+    state: link
+  notify: reload nginx
+
+- name: nginx -t
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: nginx запущен
+  ansible.builtin.service: {name: nginx, enabled: true, state: started}
+
+- name: Применить конфиг nginx перед выпуском сертификата
+  ansible.builtin.meta: flush_handlers
+
+- name: Выпуск сертификата Let's Encrypt
+  ansible.builtin.command: >-
+    certbot certonly --webroot -w /var/www/acme -d {{ node_domain }}
+    --key-type ecdsa --non-interactive --agree-tos --register-unsafely-without-email
+    --deploy-hook "systemctl reload nginx"
+  args:
+    creates: "/etc/letsencrypt/live/{{ node_domain }}/fullchain.pem"
+  register: certbot
+
+- name: Виртуальный хост с TLS и XHTTP
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ node_domain }}"
+    mode: "0644"
+  vars: {tls: true}
+  notify: reload nginx
+
+- name: nginx -t (с TLS)
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Таймер продления сертификата
+  ansible.builtin.service: {name: certbot.timer, enabled: true, state: started}
+
+- name: Применить конфиг nginx
+  ansible.builtin.meta: flush_handlers

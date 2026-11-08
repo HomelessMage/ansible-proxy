@@ -1,0 +1,35 @@
+# Домен ноды; по умолчанию совпадает с именем хоста в inventory.yml
+node_domain: "{{ inventory_hostname }}"
+
+# Клиенты XHTTP-инбаунда: у каждого свой UUID. Добавил имя, перезапустил плейбук — клиент появился.
+# Удалять клиентов — руками в панели.
+xui_clients:
+  - home-router
+
+# SSH: пусто = порт 22 открыт всем (вход только по ключу); иначе список IPv4/подсетей
+ssh_allow: []
+
+# Ключи root
+ssh_keys:
+  - "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+# oh-my-zsh для root
+zsh_theme: darkblood
+zsh_plugins: [git]
+
+xui_image: ghcr.io/mhsanaei/3x-ui:v3.11.0
+xui_panel_port: 5223
+xui_sub_port: 2096
+xhttp_port: 10001
+
+# Своя страница-заглушка ноды: файлы из этого каталога копируются в корень сайта.
+# Если каталога нет — стандартная страница nginx.
+site_dir: "{{ playbook_dir }}/site/{{ inventory_hostname }}"
+
+# Секреты генерируются один раз и хранятся локально в credentials/<хост>/
+creds_dir: "{{ playbook_dir }}/credentials/{{ inventory_hostname }}"
+xhttp_path: "{{ lookup('ansible.builtin.password', creds_dir + '/xhttp_path', chars=['ascii_letters', 'digits'], length=20) }}"
+xui_user: "{{ lookup('ansible.builtin.password', creds_dir + '/panel_user', chars=['ascii_lowercase'], length=10) }}"
+xui_password: "{{ lookup('ansible.builtin.password', creds_dir + '/panel_password', chars=['ascii_letters', 'digits'], length=24) }}"
+xui_base_path: "{{ lookup('ansible.builtin.password', creds_dir + '/panel_base_path', chars=['ascii_letters', 'digits'], length=18) }}"
+client_seed: "{{ lookup('ansible.builtin.password', creds_dir + '/client_seed', chars=['ascii_letters', 'digits'], length=32) }}"

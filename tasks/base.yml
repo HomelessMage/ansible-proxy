@@ -1,0 +1,52 @@
+- name: Hostname
+  ansible.builtin.hostname:
+    name: "{{ node_domain }}"
+
+- name: Пакеты
+  ansible.builtin.apt:
+    name: [zsh, git, wget, curl, nano, nftables, unattended-upgrades, nginx, certbot, docker.io, docker-compose]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Автообновления безопасности
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+- name: sshd — только ключи, root без пароля
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-node.conf
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+    mode: "0644"
+  notify: reload ssh
+
+- name: sshd — проверка конфига
+  ansible.builtin.command: sshd -t
+  changed_when: false
+
+- name: nftables — наружу только 22, 80, 443
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0755"
+    validate: nft -c -f %s
+  notify: reload nftables
+
+- name: nftables включён
+  ansible.builtin.service: {name: nftables, enabled: true, state: started}
+
+- name: Docker без собственного файрвола и bridge (контейнер в host-сети)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ {'iptables': false, 'ip6tables': false, 'bridge': 'none', 'log-driver': 'local'} | to_nice_json }}\n"
+    mode: "0644"
+  notify: restart docker
+
+- name: Применить файрвол и docker до запуска сервисов
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,7 @@
+# Локальное: реальные домены нод, секреты, своя страница-заглушка
+inventory.yml
+host_vars/
+credentials/
+site/
+*.retry
+.ansible/

@@ -1,0 +1,161 @@
+- name: Каталог 3x-ui
+  ansible.builtin.file: {path: /opt/3x-ui/db, state: directory, mode: "0700"}
+
+- name: compose.yml
+  ansible.builtin.template: {src: compose.yml.j2, dest: /opt/3x-ui/compose.yml, mode: "0644"}
+
+- name: Запуск контейнера
+  ansible.builtin.command: docker compose up -d
+  args: {chdir: /opt/3x-ui}
+  register: up
+  changed_when: up.stderr is search('Started|Recreated|Created|Pulled')
+
+- name: Ждём панель (2053 при первом запуске или {{ xui_panel_port }})
+  ansible.builtin.command: ss -Htln '( sport = :2053 or sport = :{{ xui_panel_port }} )'
+  register: panel_ports
+  check_mode: false
+  until: panel_ports.stdout != ''
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Учётка, порт, путь и адрес панели
+  ansible.builtin.command: >-
+    docker exec 3x-ui /app/x-ui setting
+    -username {{ xui_user }} -password {{ xui_password }}
+    -port {{ xui_panel_port }} -webBasePath /{{ xui_base_path }}/ -listenIP 127.0.0.1
+  when: ('127.0.0.1:' ~ xui_panel_port) not in panel_ports.stdout
+  register: panel_set
+  no_log: true
+
+- name: Подписки только на 127.0.0.1
+  ansible.builtin.script: >-
+    files/xui_settings.py /opt/3x-ui/db/x-ui.db
+    subListen=127.0.0.1 subPort={{ xui_sub_port }}
+  args: {executable: python3}
+  register: sub_set
+  changed_when: "'changed' in sub_set.stdout"
+
+- name: Перезапуск панели с новыми настройками
+  ansible.builtin.command: docker restart 3x-ui
+  when: panel_set is changed or sub_set is changed
+
+- name: Панель слушает 127.0.0.1:{{ xui_panel_port }}
+  ansible.builtin.wait_for: {host: 127.0.0.1, port: "{{ xui_panel_port }}", timeout: 60}
+
+- name: API-токен для Ansible (перевыпускается при каждом прогоне)
+  ansible.builtin.command: docker exec 3x-ui /app/x-ui setting -getApiToken -tokenName ansible -tokenScope admin
+  register: token_out
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Адрес API
+  ansible.builtin.set_fact:
+    xui_api: "http://127.0.0.1:{{ xui_panel_port }}/{{ xui_base_path }}/panel/api"
+    xui_token: "{{ token_out.stdout | regex_findall('[A-Za-z0-9_.-]{24,}') | last }}"
+  no_log: true
+
+- name: Список инбаундов
+  ansible.builtin.uri:
+    url: "{{ xui_api }}/inbounds/list"
+    headers: {Authorization: "Bearer {{ xui_token }}"}
+  register: inbounds
+  check_mode: false
+
+- name: Клиенты из xui_clients
+  ansible.builtin.set_fact:
+    inbound: "{{ inbounds.json.obj | selectattr('tag', 'equalto', 'xhttp-' ~ xhttp_port) | first | default(none) }}"
+    wanted_clients: >-
+      {%- set out = [] -%}
+      {%- for name in xui_clients -%}
+      {%- set _ = out.append({'id': (client_seed ~ name) | to_uuid,
+            'email': ((client_seed ~ 'email' ~ name) | hash('sha256'))[:10], 'flow': '', 'limitIp': 0,
+            'totalGB': 0, 'expiryTime': 0, 'enable': true, 'tgId': 0,
+            'subId': ((client_seed ~ name) | hash('sha1'))[:16], 'comment': name, 'reset': 0}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Создать XHTTP-инбаунд
+  ansible.builtin.uri:
+    url: "{{ xui_api }}/inbounds/add"
+    method: POST
+    headers: {Authorization: "Bearer {{ xui_token }}"}
+    body_format: json
+    body:
+      enable: true
+      remark: "{{ inventory_hostname }}"
+      listen: 127.0.0.1
+      port: "{{ xhttp_port }}"
+      protocol: vless
+      tag: "xhttp-{{ xhttp_port }}"
+      expiryTime: 0
+      total: 0
+      settings: "{{ {'clients': wanted_clients, 'decryption': 'none', 'encryption': 'none'} | to_json }}"
+      streamSettings: "{{ stream | to_json }}"
+      sniffing: '{"enabled": false}'
+  vars:
+    stream:
+      network: xhttp
+      security: none
+      externalProxy: [{forceTls: tls, dest: "{{ node_domain }}", port: 443, remark: ""}]
+      xhttpSettings:
+        path: "/{{ xhttp_path }}/"
+        host: ""
+        headers: {}
+        mode: packet-up
+        xPaddingBytes: "100-1000"
+        scMaxBufferedPosts: 30
+        scMaxEachPostBytes: "1000000"
+        scStreamUpServerSecs: "20-80"
+        noSSEHeader: false
+      sockopt: {trustedXForwardedFor: [X-Forwarded-For]}
+  register: add_inbound
+  failed_when: not (add_inbound.json.success | default(false))
+  changed_when: true
+  when: inbound is none
+
+- name: Недостающие клиенты
+  ansible.builtin.set_fact:
+    missing_clients: >-
+      {{ wanted_clients | rejectattr('id', 'in',
+         ((inbound.settings | from_json) if inbound.settings is string else inbound.settings).clients
+         | map(attribute='id') | list) | list }}
+  when: inbound is not none
+
+- name: Добавить клиентов
+  ansible.builtin.uri:
+    url: "{{ xui_api }}/clients/add"
+    method: POST
+    headers: {Authorization: "Bearer {{ xui_token }}"}
+    body_format: json
+    body:
+      client: "{{ item }}"
+      inboundIds: ["{{ inbound.id }}"]
+  loop: "{{ missing_clients | default([]) }}"
+  loop_control: {label: "{{ item.comment }} → {{ item.email }}"}
+  register: add_clients
+  failed_when: not (add_clients.json.success | default(false))
+  changed_when: true
+  when: inbound is not none
+
+- name: Ссылки и доступ к панели — в credentials/{{ inventory_hostname }}/
+  delegate_to: localhost
+  become: false
+  ansible.builtin.copy:
+    dest: "{{ creds_dir }}/{{ item.file }}"
+    content: "{{ item.content }}"
+    mode: "0600"
+  loop:
+    - file: links.txt
+      content: |
+        {% for c in wanted_clients %}
+        vless://{{ c.id }}@{{ node_domain }}:443?encryption=none&security=tls&sni={{ node_domain }}&fp=chrome&type=xhttp&mode=packet-up&path=%2F{{ xhttp_path }}%2F&extra=%7B%22mode%22%3A%22packet-up%22%2C%22xPaddingBytes%22%3A%22100-1000%22%7D#{{ node_domain.split('.')[0] }}-{{ c.email }}
+        {% endfor %}
+    - file: panel.txt
+      content: |
+        ssh -N -L {{ xui_panel_port }}:127.0.0.1:{{ xui_panel_port }} root@{{ ansible_host | default(inventory_hostname) }}
+        http://127.0.0.1:{{ xui_panel_port }}/{{ xui_base_path }}/
+        user: {{ xui_user }}
+        password: {{ xui_password }}
+  loop_control: {label: "{{ item.file }}"}

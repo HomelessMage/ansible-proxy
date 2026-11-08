@@ -1,0 +1,17 @@
+- name: VPN-нода (3x-ui в Docker + nginx XHTTP)
+  hosts: all
+  gather_facts: true
+  handlers:
+    - name: reload ssh
+      ansible.builtin.service: {name: ssh, state: reloaded}
+    - name: reload nftables
+      ansible.builtin.service: {name: nftables, state: restarted}
+    - name: restart docker
+      ansible.builtin.service: {name: docker, state: restarted}
+    - name: reload nginx
+      ansible.builtin.service: {name: nginx, state: reloaded}
+  tasks:
+    - {name: Базовая система, ansible.builtin.import_tasks: tasks/base.yml, tags: base}
+    - {name: root и zsh, ansible.builtin.import_tasks: tasks/users.yml, tags: root}
+    - {name: nginx и сертификат, ansible.builtin.import_tasks: tasks/nginx.yml, tags: nginx}
+    - {name: 3x-ui, ansible.builtin.import_tasks: tasks/xui.yml, tags: xui}

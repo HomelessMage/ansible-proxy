@@ -1,0 +1,7 @@
+# Скопируй в inventory.yml (он в .gitignore) и впиши свои домены.
+# Имя хоста = домен, на который выпускается сертификат.
+all:
+  vars:
+    ansible_user: root
+  hosts:
+    node1.example.org:

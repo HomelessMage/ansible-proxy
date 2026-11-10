@@ -258,7 +258,7 @@ OpenWrt 25.12 (пакеты `apk`), не для 24.10 с `opkg`.
    скрипт подскажет, какой файл скачать на компьютере и куда положить через `scp`.
 3. Замена. Запускается в фоне на самом роутере, чтобы обрыв SSH её не прервал:
    ```sh
-   ssh root@<роутер> 'start-stop-daemon -S -b -x /bin/sh -- -c "sh /root/podkop-engine.sh swap > /root/pe-swap.log 2>&1"'
+   ssh root@<роутер> 'start-stop-daemon -S -b -m -p /tmp/pe-swap.pid -x /bin/sh -- -c "sh /root/podkop-engine.sh swap > /root/pe-swap.log 2>&1"'
    ```
    Через минуту посмотри результат:
    ```sh

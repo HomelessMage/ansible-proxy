@@ -2,6 +2,37 @@
   ansible.builtin.hostname:
     name: "{{ node_domain }}"
 
+# Образы хостеров клонируют с шаблона: в настройке grub-pc остаётся диск шаблона
+# (/dev/disk/by-id/…другой-id), и любой apt, задевший grub-pc, падает на «cannot grub-install».
+# Прописываем настоящий загрузочный диск и донастраиваем недонастроенные пакеты.
+- name: GRUB — диск загрузчика из шаблона хостера
+  ansible.builtin.shell: |
+    set -eu
+    st=$(dpkg-query -W -f='${db:Status-Status}' grub-pc 2>/dev/null || true)
+    case "$st" in ''|not-installed|config-files) echo ok; exit 0 ;; esac
+    changed=0
+    cur=$(debconf-show grub-pc | sed -n 's/^\* grub-pc\/install_devices: //p')
+    good=0
+    for d in $(echo "$cur" | tr ',' ' '); do [ -e "$d" ] && good=1; done
+    if [ "$good" = 0 ]; then
+      disk=$(grub-probe -t disk /boot/grub)
+      dev=$disk
+      for l in /dev/disk/by-id/*; do
+        case $l in *-part*) continue ;; esac
+        [ "$(readlink -f "$l")" = "$disk" ] && { dev=$l; break; }
+      done
+      echo "grub-pc grub-pc/install_devices multiselect $dev" | debconf-set-selections
+      changed=1
+    fi
+    if [ -n "$(dpkg --audit)" ]; then
+      DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+      changed=1
+    fi
+    [ "$changed" = 1 ] && echo changed || echo ok
+  args: {executable: /bin/bash}
+  register: grub_fix
+  changed_when: grub_fix.stdout_lines | last == 'changed'
+
 - name: Пакеты
   ansible.builtin.apt:
     name: [zsh, git, wget, curl, nano, nftables, unattended-upgrades, nginx, certbot, docker.io, docker-compose]
